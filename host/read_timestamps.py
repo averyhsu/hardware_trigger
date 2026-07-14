@@ -25,6 +25,7 @@ Examples:
 
 import argparse
 import sys
+import time
 
 # ============================================================================
 #  RIG CONFIGURATION — edit these to match your setup
@@ -35,11 +36,14 @@ PIXEL_FORMAT     = 'BayerRG8'  # 1 B/px (1/3 of RGB8) -> 3x the frame rate for a
                              #   given bandwidth. 'Mono8' for grayscale; 'RGB8'
                              #   for on-camera color (heavy). BayerRG8 keeps
                              #   color at 1 B/px — debayer on the host.
-THROUGHPUT_LIMIT_BPS = 200_000_000  # camera DeviceLinkThroughputLimit (range
+THROUGHPUT_LIMIT_BPS = 450_000_000  # camera DeviceLinkThroughputLimit (range
                              #   18e6..450e6 on this model). Raise toward 450e6
                              #   ONLY after raising host usbfs_memory_mb (16->1000),
                              #   or the host starves and frames come back INCOMPLETE.
 OUTPUT_CSV       = 'timestamps.csv'  # per-frame log; written every run (cwd-relative)
+BUFFER_COUNT     = 30        # async stream buffers; keep high so the host never
+                             #   back-pressures the camera (a per-frame print/CSV
+                             #   loop DOES, and silently caps the measured rate)
 DEFAULT_FRAMES   = 100       # frames to capture when none given on the command line
 FRAME_TIMEOUT_MS = 2000      # per-frame wait; must exceed one trigger period
                              #   (>91 ms @ 11 fps). Raise for slower trigger rates.
@@ -195,6 +199,11 @@ def configure_trigger(cam):
     try_set(cam, 'TriggerActivation', 'RisingEdge')
     try_set(cam, 'ExposureMode',      'Timed')
     try_set(cam, 'ExposureTime',      float(EXPOSURE_US))
+    # Disable the internal free-run rate generator so the EXTERNAL trigger drives
+    # FrameStart. If left enabled the camera free-runs at AcquisitionFrameRate and
+    # silently ignores the trigger (measured rate would match the internal rate,
+    # not the Teensy).
+    try_set(cam, 'AcquisitionFrameRateEnable', False)
     try_set(cam, 'TriggerMode',       'On')      # enable last
 
 
@@ -233,44 +242,50 @@ def capture(cam, num_frames, csv_path):
 
     hz = timestamp_hz(cam)
     print(f"Timestamp tick rate: {hz:.0f} Hz  ({1e9 / hz:.3f} ns/tick)")
-    print(f"\nCapturing {num_frames} frames -> {csv_path} "
-          f"(Ctrl-C to stop early)...\n")
+    print(f"\nCapturing {num_frames} frames -> {csv_path} (async streaming, "
+          f"{BUFFER_COUNT} buffers; Ctrl-C to stop early)...")
 
-    csv_file = open(csv_path, 'w')
-    csv_file.write("frame_id,timestamp_ticks,dt_s,status\n")
+    # Minimal callback: copy out (id, timestamp, status) and immediately requeue
+    # the buffer. Any real per-frame work here (print, CSV, decode) would stall
+    # the pipeline and make the camera drop frames — do it after streaming stops.
+    records = []
+    def handler(c, stream, frame):
+        records.append((frame.get_id(), frame.get_timestamp(),
+                        frame.get_status() == FrameStatus.Complete))
+        c.queue_frame(frame)
 
-    prev = None
-    deltas = []
-    incomplete = 0
+    cam.start_streaming(handler=handler, buffer_count=BUFFER_COUNT)
     try:
-        for frame in cam.get_frame_generator(limit=num_frames,
-                                             timeout_ms=FRAME_TIMEOUT_MS):
-            ts = frame.get_timestamp()               # camera clock ticks
-            ok = frame.get_status() == FrameStatus.Complete
+        last_n, last_progress = 0, time.monotonic()
+        while len(records) < num_frames:
+            time.sleep(0.02)
+            n = len(records)
+            if n > last_n:
+                last_n, last_progress = n, time.monotonic()
+            elif (time.monotonic() - last_progress) * 1000 > FRAME_TIMEOUT_MS:
+                print(f"Timed out (>{FRAME_TIMEOUT_MS} ms with no new frame). "
+                      "Are triggers arriving? Check wiring/ground and the Teensy.")
+                break
+    except KeyboardInterrupt:
+        print("(stopped early)")
+    finally:
+        cam.stop_streaming()
+
+    # Reduce + write CSV after streaming has stopped (I/O off the hot path).
+    records = records[:num_frames]
+    deltas, incomplete, prev = [], 0, None
+    with open(csv_path, 'w') as f:
+        f.write("frame_id,timestamp_ticks,dt_s,status\n")
+        for fid, ts, ok in records:
             if not ok:
                 incomplete += 1
             dt_s = (ts - prev) / hz if prev is not None else None
             if dt_s is not None:
                 deltas.append(dt_s)
-                print(f"frame {frame.get_id():>5}  ts={ts:>16}  "
-                      f"dt={dt_s * 1e3:9.4f} ms  ({1.0 / dt_s:8.4f} Hz)"
-                      f"{'' if ok else '   [INCOMPLETE]'}")
-            else:
-                print(f"frame {frame.get_id():>5}  ts={ts:>16}   (first)")
-            status = 'Complete' if ok else str(frame.get_status())
-            csv_file.write(f"{frame.get_id()},{ts},"
-                           f"{'' if dt_s is None else dt_s},{status}\n")
+            f.write(f"{fid},{ts},{'' if dt_s is None else dt_s},"
+                    f"{'Complete' if ok else 'Incomplete'}\n")
             prev = ts
-    except KeyboardInterrupt:
-        print("\n(stopped early)")
-    except VmbTimeout:
-        print(f"\nTimed out waiting for a frame (>{FRAME_TIMEOUT_MS} ms). "
-              "Are triggers arriving? Check wiring, shared ground, and that "
-              "the Teensy is running (serial heartbeat at 115200).")
-    finally:
-        csv_file.close()
-        print(f"\nwrote {csv_path}")
-
+    print(f"wrote {csv_path}  ({len(records)} frames)")
     summarize(deltas, incomplete)
 
 

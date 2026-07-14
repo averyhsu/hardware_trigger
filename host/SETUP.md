@@ -146,7 +146,9 @@ interval std dev: small (microseconds) = low trigger jitter
 | `No camera found` | `GENICAM_GENTL64_PATH` unset (§1), USB permissions (§2), or camera not powered/enumerated (`lsusb`). |
 | `TriggerSource: not available` + list of options | Wrong line name — set `TRIGGER_SOURCE` (top of the script) to one of the listed values. |
 | No intervals / hangs then times out | No trigger edges arriving: check wiring, **shared ground**, and that the Teensy is running (serial heartbeat at 115200). |
-| Many `[INCOMPLETE]` frames | USB bandwidth / dropped transfers — raise `usbfs_memory_mb` (§2). |
+| Many incomplete frames | USB bandwidth / dropped transfers — raise `usbfs_memory_mb` (§2), lower payload (PixelFormat/ROI), or lower `THROUGHPUT_LIMIT_BPS`. |
+| Measured fps caps well below the trigger rate | Host back-pressure: per-frame work in the receive loop stalls the camera. The script streams asynchronously with `BUFFER_COUNT` buffers to avoid this — keep heavy work off the callback. Also confirm `usbfs_memory_mb` is 1000. |
+| Measured fps = a fixed value unrelated to the trigger (e.g. 128.6) | Camera is free-running: `AcquisitionFrameRateEnable` is on and overriding the external trigger. The script sets it False; check it wasn't re-enabled elsewhere. |
 
 ## 8. Future: absolute (UTC) timestamps
 
