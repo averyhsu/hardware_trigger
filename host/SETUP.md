@@ -85,15 +85,31 @@ python -c "import vmbpy; print(vmbpy.__version__)"   # sanity check
 
 ## 5. Run
 
-Pick the camera input line the Teensy is wired to (same `TriggerSource` you'd
-set in the Vimba X viewer). If unsure, list what the camera exposes:
+Rig settings live as **constants at the top of `host/read_timestamps.py`** —
+edit them there (no command-line flags for these):
+
+```python
+TRIGGER_SOURCE = 'Line0'          # camera input wired to the Teensy TRIG_PIN
+EXPOSURE_US    = 200              # camera ExposureTime (Timed mode)
+OUTPUT_CSV     = 'timestamps.csv' # per-frame log, written every run (cwd-relative)
+DEFAULT_FRAMES = 100
+```
+
+If unsure which line the Teensy is wired to, list what the camera exposes:
 
 ```bash
 conda activate vimbax
+python3 host/read_timestamps.py --list-cameras        # detected cameras (skips simulators at capture time)
 python3 host/read_timestamps.py --list-lines          # show TriggerSource / LineSelector options
-python3 host/read_timestamps.py 200 --source Line0    # capture 200 frames
-python3 host/read_timestamps.py 200 --source Line0 --csv run.csv   # + save timestamps
+python3 host/read_timestamps.py 200                   # capture 200 frames -> timestamps.csv
 ```
+
+Every run writes `OUTPUT_CSV` (default `timestamps.csv` in the current
+directory) with columns `frame_id, timestamp_ticks, dt_s, status`. The
+`timestamp_ticks` value is the **camera's** on-board clock at frame
+acquisition (embedded in the frame), not the host USB-receive time. No image
+files are saved — this is a timing/verification tool; record images with the
+Vimba X viewer if you need them.
 
 Expected with firmware at `fps = 11.0`:
 
@@ -117,7 +133,7 @@ interval std dev: small (microseconds) = low trigger jitter
 |---|---|
 | `Could not load vmbpy` | SDK/runtime not installed, or wheel not in this env. §1, §3. |
 | `No camera found` | `GENICAM_GENTL64_PATH` unset (§1), USB permissions (§2), or camera not powered/enumerated (`lsusb`). |
-| `TriggerSource: not available` + list of options | Wrong line name — re-run with `--source` set to one of the listed values. |
+| `TriggerSource: not available` + list of options | Wrong line name — set `TRIGGER_SOURCE` (top of the script) to one of the listed values. |
 | No intervals / hangs then times out | No trigger edges arriving: check wiring, **shared ground**, and that the Teensy is running (serial heartbeat at 115200). |
 | Many `[INCOMPLETE]` frames | USB bandwidth / dropped transfers — raise `usbfs_memory_mb` (§2). |
 
