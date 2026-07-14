@@ -26,5 +26,10 @@ venv/
 .DS_Store
 *.swp
 
+# Capture output (read_timestamps.py writes a per-frame CSV each run)
+timestamps.csv
+host/*.csv
+*.csv
+
 # Claude Code local settings
 .claude/settings.local.json
