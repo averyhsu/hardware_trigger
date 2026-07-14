@@ -18,7 +18,7 @@
 
 const int TRIG_PIN = 2;
 
-volatile float fps = 11.0f;              // frame rate (Hz)
+volatile float fps = 30.0f;              // frame rate (Hz)
 
 // Trigger pulse width. Only needs to be a clean edge the camera can latch;
 // 10 us sits well above any camera's minimum trigger-pulse spec. This does
