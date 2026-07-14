@@ -31,7 +31,8 @@ def load_vmbpy():
     parsing so `--help` works without the SDK present.
     """
     try:
-        from vmbpy import VmbSystem, VmbFeatureError, FrameStatus
+        from vmbpy import (VmbSystem, VmbFeatureError, VmbTimeout,
+                           FrameStatus)
     except (ImportError, OSError) as exc:
         sys.exit(
             f"Could not load vmbpy ({exc}).\n"
@@ -40,7 +41,7 @@ def load_vmbpy():
             "See host/SETUP.md for the Linux install steps."
         )
     globals().update(VmbSystem=VmbSystem, VmbFeatureError=VmbFeatureError,
-                     FrameStatus=FrameStatus)
+                     VmbTimeout=VmbTimeout, FrameStatus=FrameStatus)
 
 # ---- Defaults (override on the command line) --------------------------------
 DEFAULT_SOURCE   = 'Line0'   # non-isolated input pin wired to the Teensy TRIG_PIN
@@ -62,6 +63,11 @@ def parse_args():
                         f"(default {FRAME_TIMEOUT_MS})")
     p.add_argument('--csv', metavar='PATH',
                    help="also write per-frame timestamps to a CSV file")
+    p.add_argument('--camera-id',
+                   help="open this camera id/serial instead of auto-selecting "
+                        "(needed if more than one real camera is present)")
+    p.add_argument('--list-cameras', action='store_true',
+                   help="list all detected cameras and exit")
     p.add_argument('--list-lines', action='store_true',
                    help="print the camera's selectable TriggerSource lines and exit")
     return p.parse_args()
@@ -114,6 +120,34 @@ def list_lines(cam):
         print("Selectable LineSelector (physical I/O) values:")
         for ln in lines:
             print(f"  {ln}")
+
+
+def is_simulator(cam):
+    """True for the GenTL Camera Simulator transport-layer devices."""
+    return 'Simulator' in (cam.get_model() or '')
+
+
+def describe(cam):
+    return f"{cam.get_id()}  {cam.get_model()}  (serial {cam.get_serial()})"
+
+
+def select_camera(cams, camera_id):
+    """Pick the camera to use: explicit id wins; else the sole real (non-sim) one."""
+    if camera_id:
+        for c in cams:
+            if camera_id in (c.get_id(), c.get_serial()):
+                return c
+        sys.exit(f"Camera id/serial '{camera_id}' not found. "
+                 f"Use --list-cameras to see options.")
+    real = [c for c in cams if not is_simulator(c)]
+    if len(real) == 1:
+        return real[0]
+    if not real:
+        sys.exit("Only simulator cameras detected — no real Alvium found. "
+                 "Check USB connection/power. Use --list-cameras to inspect.")
+    ids = ', '.join(c.get_id() for c in real)
+    sys.exit(f"Multiple real cameras detected ({ids}). "
+             f"Pick one with --camera-id <id-or-serial>.")
 
 
 def timestamp_hz(cam):
@@ -177,6 +211,10 @@ def capture(cam, num_frames, timeout_ms, csv_path):
             prev = ts
     except KeyboardInterrupt:
         print("\n(stopped early)")
+    except VmbTimeout:
+        print(f"\nTimed out waiting for a frame (>{timeout_ms} ms). "
+              "Are triggers arriving? Check wiring, shared ground, and that "
+              "the Teensy is running (serial heartbeat at 115200).")
     finally:
         if csv_file:
             csv_file.close()
@@ -212,11 +250,18 @@ def main():
         if not cams:
             sys.exit("No camera found. Is the Alvium connected and powered, "
                      "and are USB permissions set up? See host/SETUP.md.")
-        with cams[0] as cam:
+        if args.list_cameras:
+            print(f"{len(cams)} camera(s) detected:")
+            for c in cams:
+                tag = ' [simulator]' if is_simulator(c) else ''
+                print(f"  {describe(c)}{tag}")
+            return
+        cam = select_camera(cams, args.camera_id)
+        with cam:
             if args.list_lines:
                 list_lines(cam)
                 return
-            print(f"Camera: {cam.get_id()}")
+            print(f"Camera: {describe(cam)}")
             configure_trigger(cam, args.source)
             capture(cam, args.num_frames, args.timeout_ms, args.csv)
 
