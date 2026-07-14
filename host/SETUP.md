@@ -89,11 +89,22 @@ Rig settings live as **constants at the top of `host/read_timestamps.py`** —
 edit them there (no command-line flags for these):
 
 ```python
-TRIGGER_SOURCE = 'Line0'          # camera input wired to the Teensy TRIG_PIN
-EXPOSURE_US    = 200              # camera ExposureTime (Timed mode)
-OUTPUT_CSV     = 'timestamps.csv' # per-frame log, written every run (cwd-relative)
-DEFAULT_FRAMES = 100
+TRIGGER_SOURCE       = 'Line0'      # camera input wired to the Teensy TRIG_PIN
+EXPOSURE_US          = 200          # camera ExposureTime (Timed mode)
+PIXEL_FORMAT         = 'BayerRG8'   # 1 B/px (1/3 of RGB8); 'Mono8' gray; 'RGB8' on-cam color
+THROUGHPUT_LIMIT_BPS = 200_000_000  # DeviceLinkThroughputLimit (18e6..450e6 on the U-240c)
+OUTPUT_CSV           = 'timestamps.csv'  # per-frame log, written every run (cwd-relative)
+DEFAULT_FRAMES       = 100
 ```
+
+**Frame-rate ceiling.** At full res (2.35 MP) the achievable fps depends on
+pixel format and bandwidth. RGB8 (7.06 MB/frame) tops out ~28 fps @ 200 MB/s;
+Mono8/BayerRG8 (2.35 MB/frame) reach 85 fps @ 200 MB/s and up to the sensor's
+126 fps at higher throughput. To go fast: use BayerRG8/Mono8, raise
+`usbfs_memory_mb` (§2), then raise `THROUGHPUT_LIMIT_BPS` toward 450e6. If the
+host USB buffer (`usbfs_memory_mb`) is left at the default 16, the camera drops
+triggers (every-other-frame beat pattern) even when payload/bandwidth allow the
+rate — raise it to 1000.
 
 If unsure which line the Teensy is wired to, list what the camera exposes:
 

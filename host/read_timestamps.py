@@ -31,6 +31,14 @@ import sys
 # ============================================================================
 TRIGGER_SOURCE   = 'Line0'   # camera input line wired to the Teensy TRIG_PIN
 EXPOSURE_US      = 200       # camera ExposureTime in microseconds (Timed mode)
+PIXEL_FORMAT     = 'BayerRG8'  # 1 B/px (1/3 of RGB8) -> 3x the frame rate for a
+                             #   given bandwidth. 'Mono8' for grayscale; 'RGB8'
+                             #   for on-camera color (heavy). BayerRG8 keeps
+                             #   color at 1 B/px — debayer on the host.
+THROUGHPUT_LIMIT_BPS = 200_000_000  # camera DeviceLinkThroughputLimit (range
+                             #   18e6..450e6 on this model). Raise toward 450e6
+                             #   ONLY after raising host usbfs_memory_mb (16->1000),
+                             #   or the host starves and frames come back INCOMPLETE.
 OUTPUT_CSV       = 'timestamps.csv'  # per-frame log; written every run (cwd-relative)
 DEFAULT_FRAMES   = 100       # frames to capture when none given on the command line
 FRAME_TIMEOUT_MS = 2000      # per-frame wait; must exceed one trigger period
@@ -173,6 +181,10 @@ def timestamp_hz(cam):
 
 def configure_trigger(cam):
     print("Configuring external trigger (FrameStart / Timed):")
+    # Payload/bandwidth settings first — must be set while not streaming.
+    try_set(cam, 'PixelFormat',       PIXEL_FORMAT)
+    try_set(cam, 'DeviceLinkThroughputLimitMode', 'On')
+    try_set(cam, 'DeviceLinkThroughputLimit',     int(THROUGHPUT_LIMIT_BPS))
     try_set(cam, 'AcquisitionMode',   'Continuous')
     try_set(cam, 'TriggerSelector',   'FrameStart')
     if not try_set(cam, 'TriggerSource', TRIGGER_SOURCE):
