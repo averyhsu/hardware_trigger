@@ -44,7 +44,7 @@ OUTPUT_CSV       = 'timestamps.csv'  # per-frame log; written every run (cwd-rel
 BUFFER_COUNT     = 30        # async stream buffers; keep high so the host never
                              #   back-pressures the camera (a per-frame print/CSV
                              #   loop DOES, and silently caps the measured rate)
-DEFAULT_FRAMES   = 100       # frames to capture when none given on the command line
+DEFAULT_FRAMES   = 30       # frames to capture when none given on the command line
 FRAME_TIMEOUT_MS = 2000      # per-frame wait; must exceed one trigger period
                              #   (>91 ms @ 11 fps). Raise for slower trigger rates.
 # ============================================================================
