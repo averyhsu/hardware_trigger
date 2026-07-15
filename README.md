@@ -114,6 +114,62 @@ transport layers VmbPy loads). Then:
 python3 host/read_timestamps.py 200      # capture 200 frames
 ```
 
+## New-device setup — hitting the frame rate you command
+
+Two settings decide whether you actually capture at the fps you trigger for.
+Both are easy to miss, and both bit us — the camera silently ran far below the
+trigger rate until they were fixed. **Apply these on every new acquisition
+host.** (The root cause of an early "~13 fps ceiling" was these, not the camera.)
+
+### 1. Use an 8-bit single-channel pixel format (`BayerRG8` / `Mono8`), not `RGB8`
+`RGB8` is 3 bytes/pixel (the camera debayers on-board). `BayerRG8` / `Mono8` are
+**1 byte/pixel — one third of the data, so ~3× the achievable fps** for the same
+bandwidth. At full res (2.35 MP) `RGB8` caps ~28 fps; `BayerRG8` reaches the
+sensor's 126 fps.
+- **`BayerRG8`** keeps color (raw Bayer mosaic — debayer on the host).
+- **`Mono8`** for grayscale.
+
+How — set at the top of `host/read_timestamps.py` (it applies it to the camera),
+or set `PixelFormat` in the Vimba X viewer:
+```python
+PIXEL_FORMAT = 'BayerRG8'
+```
+
+### 2. Raise the two bandwidth limits — host buffer FIRST, then camera
+Order matters: raise the host buffer *before* the camera limit, or the host
+starves and frames come back **incomplete**.
+
+**a) Host USB buffer `usbfs_memory_mb` (Linux).** The default **16 MB is far too
+low** for a USB3 camera and silently throttles throughput — this was the hidden
+cause of the stuck frame rate.
+```bash
+cat /sys/module/usbcore/parameters/usbfs_memory_mb                       # check (default 16)
+sudo sh -c 'echo 1000 > /sys/module/usbcore/parameters/usbfs_memory_mb'  # until reboot
+# permanent: add  usbcore.usbfs_memory_mb=1000  to GRUB_CMDLINE_LINUX in
+# /etc/default/grub, then:  sudo update-grub && reboot
+```
+Confirm the camera is on a real USB3 (SuperSpeed) link — `lsusb -t` should show
+`5000M` for it.
+
+**b) Camera `DeviceLinkThroughputLimit`.** The camera's own bandwidth cap. Raise
+it toward the model max (**450 MB/s** on the 1800 U-240c) *after* (a). Set it at
+the top of `host/read_timestamps.py`, or in the viewer:
+```python
+THROUGHPUT_LIMIT_BPS = 450_000_000
+```
+**Sizing it:** `bytes/frame × target_fps ≤ DeviceLinkThroughputLimit ≤ what the
+link + usbfs can sustain`. BayerRG8 full-res = 2.35 MB/frame → 30 fps needs
+70 MB/s, 126 fps needs ~296 MB/s.
+
+### Gotcha: keep host work off the acquisition loop
+Per-frame work (printing, disk writes, decoding) inside the receive loop
+back-pressures the camera into dropping frames — this, not bandwidth, was the
+real cause of an early "~20 fps ceiling." Stream **asynchronously** with a few
+buffers and do all I/O after streaming stops (`read_timestamps.py` already does
+this; `BUFFER_COUNT` sets the buffer pool).
+
+See `host/SETUP.md` for the full Linux install + the troubleshooting table.
+
 ## Verifying fps — from good to definitive
 1. **Camera frame timestamps** (`read_timestamps.py`) — independent oscillator; the
    main check.
