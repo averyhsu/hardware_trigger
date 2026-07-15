@@ -31,5 +31,9 @@ timestamps.csv
 host/*.csv
 *.csv
 
+# Image outputs (sample frames / captures)
+*.png
+captures/
+
 # Claude Code local settings
 .claude/settings.local.json
