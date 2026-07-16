@@ -56,6 +56,8 @@ RESEED_MIN_FEATURES  = 80            # re-seed features when inliers fall below 
 LK_WIN               = (21, 21)
 LK_MAXLEVEL          = 3
 
+FULLRES_SCALE        = 2             # 2x2 Bayer->gray halves resolution; x2 -> full-res sensor px
+MM_PER_PIXEL         = None          # <-- FILL IN: mm per FULL-RES pixel (from calibration). None -> px only
 OUTPUT_CSV           = 'klt.csv'
 # ============================================================================
 
@@ -272,7 +274,8 @@ def main():
                     n_tracked = int(len(good_new))
                     if n_tracked > 0:
                         d = np.median(good_new - good_old, axis=0)
-                        dx, dy = float(d[0]), float(d[1])
+                        dx = float(d[0]) * FULLRES_SCALE   # half-res px -> full-res sensor px
+                        dy = float(d[1]) * FULLRES_SCALE
                     prev_pts = good_new.reshape(-1, 1, 2)
                 else:
                     prev_pts = None
@@ -344,8 +347,10 @@ def report(stats, records, klt_ms, elapsed):
     if tracked:
         print(f"features tracked    : mean {statistics.mean(tracked):.0f}  min {min(tracked)}")
     if dxs:
-        print(f"displacement (ds-px): |dx| mean {statistics.mean(map(abs,dxs)):.3f}  "
-              f"|dy| mean {statistics.mean(map(abs,dys)):.3f}  (x2 for full-res px)")
+        unit = "mm" if MM_PER_PIXEL is not None else "full-res px"
+        sc = MM_PER_PIXEL if MM_PER_PIXEL is not None else 1.0
+        print(f"per-frame disp ({unit}): |dx| mean {statistics.mean(map(abs,dxs))*sc:.4f}  "
+              f"|dy| mean {statistics.mean(map(abs,dys))*sc:.4f}")
     if klt_ms:
         s = sorted(klt_ms)
         p = lambda qq: s[min(len(s)-1, int(qq*len(s)))]
@@ -353,10 +358,17 @@ def report(stats, records, klt_ms, elapsed):
               f"p95 {p(.95):.2f}  max {max(s):.2f}   (budget 10.0 ms @100 fps)")
 
     with open(OUTPUT_CSV, 'w') as f:
-        f.write("frame_id,teensy_seq,teensy_t_us,dx_dspx,dy_dspx,n_tracked\n")
+        # dx_px/dy_px are FULL-RES sensor pixels; dx_mm/dy_mm present only if MM_PER_PIXEL set
+        hdr = "frame_id,teensy_seq,teensy_t_us,dx_px,dy_px,n_tracked"
+        if MM_PER_PIXEL is not None:
+            hdr += ",dx_mm,dy_mm"
+        f.write(hdr + "\n")
         for fid, seq, t_us, dx, dy, ntr in records:
-            f.write(f"{fid},{'' if seq is None else seq},{'' if t_us is None else t_us},"
-                    f"{dx:.4f},{dy:.4f},{ntr}\n")
+            row = (f"{fid},{'' if seq is None else seq},{'' if t_us is None else t_us},"
+                   f"{dx:.4f},{dy:.4f},{ntr}")
+            if MM_PER_PIXEL is not None:
+                row += f",{dx*MM_PER_PIXEL:.5f},{dy*MM_PER_PIXEL:.5f}"
+            f.write(row + "\n")
     print(f"wrote {OUTPUT_CSV}  ({n} rows)")
 
     p95 = (sorted(klt_ms)[int(0.95*len(klt_ms))] if klt_ms else 0)
