@@ -29,11 +29,30 @@ IntervalTimer frameTimer;                // fires once per frame period
 
 volatile uint32_t frameCount = 0;        // optional bring-up heartbeat
 
+// ---- Per-trigger timestamp log ---------------------------------------------
+//  Every trigger is stamped with micros() at the rising edge (= exposure start)
+//  and its sequence number. The ISR pushes into a lock-free single-producer /
+//  single-consumer ring; loop() drains it and prints "T <seq> <t_us>" over
+//  serial. The HOST joins each camera frame to this by frame counter, so every
+//  frame carries the Teensy exposure time — the system's master clock.
+//  (32-bit aligned reads/writes are atomic on Teensy 4.x, so no locks needed
+//   as long as the ISR only writes stampHead and loop() only writes stampTail.)
+const uint32_t STAMP_BUF = 512;          // power of two; ~5 s of slack at 100 Hz
+volatile uint32_t stampSeq[STAMP_BUF];
+volatile uint32_t stampT[STAMP_BUF];
+volatile uint32_t stampHead = 0;         // producer index (ISR only)
+uint32_t stampTail = 0;                  // consumer index (loop only)
+
 // ---- Frame trigger ISR -----------------------------------------------------
 void onFrameStart() {
   digitalWriteFast(TRIG_PIN, HIGH);      // rising edge -> "start exposing now"
+  uint32_t t = micros();                 // exposure-start stamp on the master clock
   delayMicroseconds(TRIG_PULSE_US);      // brief, clean pulse (~10 us)
   digitalWriteFast(TRIG_PIN, LOW);       // return low so the next edge is clean
+  uint32_t h = stampHead;                // publish (seq, t_exposure) to the ring
+  stampSeq[h] = frameCount;
+  stampT[h]   = t;
+  stampHead   = (h + 1) & (STAMP_BUF - 1);
   frameCount++;                          // camera closes its own shutter after ExposureTime
 }
 
@@ -59,6 +78,15 @@ void setup() {
 }
 
 void loop() {
+  // Drain per-trigger stamps and emit "T <seq> <t_us>" for the host time-join.
+  // Printing here (not in the ISR) keeps the trigger edges jitter-free.
+  while (stampTail != stampHead) {
+    uint32_t s = stampSeq[stampTail];
+    uint32_t t = stampT[stampTail];
+    stampTail = (stampTail + 1) & (STAMP_BUF - 1);
+    Serial.printf("T %lu %lu\n", s, t);
+  }
+
   // Optional heartbeat: confirms triggering is alive without needing a scope.
   // Remove this whole block if you want loop() empty.
   static uint32_t last = 0, lastCount = 0, t0 = 0;
